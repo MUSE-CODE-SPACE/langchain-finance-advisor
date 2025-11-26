@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Finance Advisor - Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1e3a5f 0%, #0d2137 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            padding: 30px 0;
+            color: white;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+
+        .language-selector {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .lang-btn {
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 20px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .lang-btn:hover, .lang-btn.active {
+            background: rgba(255,255,255,0.2);
+            border-color: #fbbf24;
+        }
+
+        .lang-btn.active {
+            background: #fbbf24;
+            color: #1e3a5f;
+            font-weight: 600;
+        }
+
+        .disclaimer-banner {
+            background: #fef3c7;
+            border: 1px solid #fbbf24;
+            border-radius: 10px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            color: #92400e;
+            font-size: 0.9rem;
+        }
+
+        .chat-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+            padding: 20px;
+            color: #1e3a5f;
+        }
+
+        .chat-header h2 {
+            font-size: 1.3rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .chat-messages {
+            height: 450px;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f8fafc;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            text-align: right;
+        }
+
+        .message-content {
+            display: inline-block;
+            padding: 12px 18px;
+            border-radius: 18px;
+            max-width: 85%;
+            text-align: left;
+            line-height: 1.6;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #1e3a5f 0%, #0d2137 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.bot .message-content {
+            background: white;
+            color: #333;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .message.bot .message-content h1,
+        .message.bot .message-content h2,
+        .message.bot .message-content h3 {
+            color: #1e3a5f;
+            margin: 15px 0 10px 0;
+        }
+
+        .message.bot .message-content h1 { font-size: 1.3rem; }
+        .message.bot .message-content h2 { font-size: 1.15rem; }
+        .message.bot .message-content h3 { font-size: 1rem; }
+
+        .message.bot .message-content ul,
+        .message.bot .message-content ol {
+            margin: 10px 0 10px 20px;
+        }
+
+        .message.bot .message-content li {
+            margin: 5px 0;
+        }
+
+        .message.bot .message-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+
+        .message.bot .message-content th,
+        .message.bot .message-content td {
+            border: 1px solid #e2e8f0;
+            padding: 8px;
+            text-align: left;
+        }
+
+        .chat-input-container {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .quick-btn {
+            padding: 8px 14px;
+            background: #fef3c7;
+            border: 1px solid #fbbf24;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: #92400e;
+            transition: all 0.2s;
+        }
+
+        .quick-btn:hover {
+            background: #fde68a;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 10px;
+        }
+
+        #messageInput {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #e2e8f0;
+            border-radius: 25px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #messageInput:focus {
+            border-color: #fbbf24;
+        }
+
+        #sendBtn {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+            color: #1e3a5f;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #sendBtn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(251, 191, 36, 0.4);
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .feature-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .feature-card h3 {
+            color: #1e3a5f;
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+
+        .feature-card p {
+            color: #64748b;
+            font-size: 0.85rem;
+            line-height: 1.4;
+        }
+
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: white;
+            opacity: 0.9;
+        }
+
+        footer a {
+            color: #fbbf24;
+            text-decoration: underline;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 5px;
+            padding: 15px;
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            background: #fbbf24;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>💰 AI Finance Advisor</h1>
+            <p id="headerDesc">Your intelligent personal finance companion powered by LangChain</p>
+            <div class="language-selector">
+                <button class="lang-btn active" onclick="setLanguage('en')">English</button>
+                <button class="lang-btn" onclick="setLanguage('ko')">한국어</button>
+                <button class="lang-btn" onclick="setLanguage('ja')">日本語</button>
+            </div>
+        </header>
+
+        <div class="disclaimer-banner" id="disclaimer">
+            <strong>⚠️ Important Disclaimer:</strong> This is for educational purposes only and is NOT financial advice. Always consult a qualified financial advisor for personalized guidance.
+        </div>
+
+        <div class="chat-container">
+            <div class="chat-header">
+                <h2 id="chatTitle">💬 Financial Education Chat</h2>
+            </div>
+
+            <div class="chat-messages" id="chatMessages">
+            </div>
+
+            <div class="chat-input-container">
+                <div class="quick-actions" id="quickActions">
+                </div>
+                <div class="input-wrapper">
+                    <input type="text" id="messageInput" placeholder="Ask about budgeting, investing, retirement..." onkeypress="handleKeyPress(event)">
+                    <button id="sendBtn" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="features" id="features">
+        </div>
+
+        <footer>
+            <p>Built with LangChain & Flask | <a href="https://github.com/yoon-k/langchain-finance-advisor">View on GitHub</a></p>
+            <p style="margin-top: 10px; font-size: 0.85rem;" id="footerDisclaimer">This is a demonstration project. Not for actual financial decisions.</p>
+        </footer>
+    </div>
+
+    <script>
+        let currentLang = 'en';
+        const chatMessages = document.getElementById('chatMessages');
+        const messageInput = document.getElementById('messageInput');
+
+        // Internationalization data
+        const i18n = {
+            en: {
+                headerDesc: "Your intelligent personal finance companion powered by LangChain",
+                disclaimer: "<strong>⚠️ Important Disclaimer:</strong> This is for educational purposes only and is NOT financial advice. Always consult a qualified financial advisor for personalized guidance.",
+                chatTitle: "💬 Financial Education Chat",
+                placeholder: "Ask about budgeting, investing, retirement...",
+                send: "Send",
+                footerDisclaimer: "This is a demonstration project. Not for actual financial decisions.",
+                quickActions: [
+                    { label: "📊 Budget 50/30/20", msg: "Explain the 50/30/20 budget rule" },
+                    { label: "📈 Compound Interest", msg: "What is compound interest?" },
+                    { label: "🏖️ Retirement", msg: "How should I plan for retirement?" },
+                    { label: "💳 Debt Payoff", msg: "How do I pay off debt?" },
+                    { label: "🚨 Emergency Fund", msg: "How much emergency fund do I need?" },
+                    { label: "📉 Investment Types", msg: "What are different investment types?" }
+                ],
+                features: [
+                    { icon: "📊", title: "Budget Planning", desc: "Learn the 50/30/20 rule for managing income" },
+                    { icon: "📈", title: "Compound Interest", desc: "Understand how money grows over time" },
+                    { icon: "🏖️", title: "Retirement Calculator", desc: "Project your retirement savings" },
+                    { icon: "💳", title: "Debt Management", desc: "Strategies to pay off debt effectively" }
+                ],
+                welcome: `<h2>💰 Welcome to Finance Advisor!</h2>
+                    <p>I can help you learn about:</p>
+                    <ul>
+                        <li><strong>📊 Budget Planning</strong> - 50/30/20 rule</li>
+                        <li><strong>🎯 Savings Goals</strong></li>
+                        <li><strong>🏖️ Retirement Planning</strong></li>
+                        <li><strong>📈 Investment Education</strong></li>
+                        <li><strong>💳 Debt Management</strong></li>
+                        <li><strong>🚨 Emergency Fund</strong></li>
+                    </ul>
+                    <p style="margin-top: 15px;"><strong>What would you like to learn about?</strong></p>
+                    <p style="margin-top: 10px; font-size: 0.85rem; color: #666;">⚠️ <em>For educational purposes only. Not financial advice.</em></p>`
+            },
+            ko: {
+                headerDesc: "LangChain으로 구동되는 지능형 개인 금융 도우미",
+                disclaimer: "<strong>⚠️ 중요 면책조항:</strong> 이것은 교육 목적으로만 제공되며 재정 조언이 아닙니다. 개인화된 안내를 위해 자격을 갖춘 재정 상담사와 상담하세요.",
+                chatTitle: "💬 금융 교육 채팅",
+                placeholder: "예산, 투자, 은퇴에 대해 질문하세요...",
+                send: "전송",
+                footerDisclaimer: "이것은 데모 프로젝트입니다. 실제 재정 결정에 사용하지 마세요.",
+                quickActions: [
+                    { label: "📊 예산 50/30/20", msg: "50/30/20 예산 법칙을 설명해주세요" },
+                    { label: "📈 복리", msg: "복리란 무엇인가요?" },
+                    { label: "🏖️ 은퇴 계획", msg: "은퇴 계획은 어떻게 세워야 하나요?" },
+                    { label: "💳 부채 상환", msg: "부채를 어떻게 갚아야 하나요?" },
+                    { label: "🚨 비상 자금", msg: "비상 자금은 얼마나 필요한가요?" },
+                    { label: "📉 투자 유형", msg: "투자 유형에는 어떤 것들이 있나요?" }
+                ],
+                features: [
+                    { icon: "📊", title: "예산 계획", desc: "소득 관리를 위한 50/30/20 법칙" },
+                    { icon: "📈", title: "복리", desc: "시간에 따른 자산 성장 이해하기" },
+                    { icon: "🏖️", title: "은퇴 계산기", desc: "은퇴 저축 예측하기" },
+                    { icon: "💳", title: "부채 관리", desc: "효과적인 부채 상환 전략" }
+                ],
+                welcome: `<h2>💰 금융 어드바이저에 오신 것을 환영합니다!</h2>
+                    <p>도움을 드릴 수 있는 것들:</p>
+                    <ul>
+                        <li><strong>📊 예산 계획</strong> - 50/30/20 법칙</li>
+                        <li><strong>🎯 저축 목표</strong></li>
+                        <li><strong>🏖️ 은퇴 계획</strong></li>
+                        <li><strong>📈 투자 교육</strong></li>
+                        <li><strong>💳 부채 관리</strong></li>
+                        <li><strong>🚨 비상 자금</strong></li>
+                    </ul>
+                    <p style="margin-top: 15px;"><strong>무엇에 대해 알고 싶으신가요?</strong></p>
+                    <p style="margin-top: 10px; font-size: 0.85rem; color: #666;">⚠️ <em>교육 목적으로만 제공됩니다. 재정 조언이 아닙니다.</em></p>`
+            },
+            ja: {
+                headerDesc: "LangChainで動作するインテリジェントなパーソナルファイナンスアシスタント",
+                disclaimer: "<strong>⚠️ 重要な免責事項:</strong> これは教育目的のみであり、財務アドバイスではありません。個別のガイダンスについては、資格のあるファイナンシャルアドバイザーにご相談ください。",
+                chatTitle: "💬 金融教育チャット",
+                placeholder: "予算、投資、退職について質問してください...",
+                send: "送信",
+                footerDisclaimer: "これはデモプロジェクトです。実際の財務判断には使用しないでください。",
+                quickActions: [
+                    { label: "📊 予算 50/30/20", msg: "50/30/20予算ルールを説明してください" },
+                    { label: "📈 複利", msg: "複利とは何ですか？" },
+                    { label: "🏖️ 退職計画", msg: "退職計画はどう立てればいいですか？" },
+                    { label: "💳 借金返済", msg: "借金はどうやって返済すればいいですか？" },
+                    { label: "🚨 緊急資金", msg: "緊急資金はいくら必要ですか？" },
+                    { label: "📉 投資タイプ", msg: "投資にはどんな種類がありますか？" }
+                ],
+                features: [
+                    { icon: "📊", title: "予算計画", desc: "収入管理のための50/30/20ルール" },
+                    { icon: "📈", title: "複利", desc: "時間とともにお金がどう増えるか理解する" },
+                    { icon: "🏖️", title: "退職計算機", desc: "退職貯蓄を予測する" },
+                    { icon: "💳", title: "債務管理", desc: "効果的な借金返済戦略" }
+                ],
+                welcome: `<h2>💰 ファイナンスアドバイザーへようこそ！</h2>
+                    <p>お手伝いできること:</p>
+                    <ul>
+                        <li><strong>📊 予算計画</strong> - 50/30/20ルール</li>
+                        <li><strong>🎯 貯蓄目標</strong></li>
+                        <li><strong>🏖️ 退職計画</strong></li>
+                        <li><strong>📈 投資教育</strong></li>
+                        <li><strong>💳 債務管理</strong></li>
+                        <li><strong>🚨 緊急資金</strong></li>
+                    </ul>
+                    <p style="margin-top: 15px;"><strong>何について知りたいですか？</strong></p>
+                    <p style="margin-top: 10px; font-size: 0.85rem; color: #666;">⚠️ <em>教育目的のみです。財務アドバイスではありません。</em></p>`
+            }
+        };
+
+        // Response database
+        const responses = {
+            en: {
+                budget: `<h2>📊 Budgeting (50/30/20 Rule)</h2>
+                    <p>A simple budgeting framework: 50% needs, 30% wants, 20% savings.</p>
+                    <h3>Key Points</h3>
+                    <ul>
+                        <li><strong>50% - Needs:</strong> Rent, utilities, food, insurance</li>
+                        <li><strong>30% - Wants:</strong> Entertainment, dining out, hobbies</li>
+                        <li><strong>20% - Savings:</strong> Emergency fund, retirement, investments</li>
+                    </ul>
+                    <h3>Tips</h3>
+                    <ul>
+                        <li>💡 Track spending for one month first</li>
+                        <li>💡 Use budgeting apps</li>
+                        <li>💡 Review and adjust monthly</li>
+                        <li>💡 Automate savings</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>For educational purposes only. Not financial advice.</em></p>`,
+
+                compound: `<h2>📈 Compound Interest</h2>
+                    <p>Interest calculated on both the initial principal and accumulated interest from previous periods.</p>
+                    <h3>Key Points</h3>
+                    <ul>
+                        <li>Money grows exponentially over time</li>
+                        <li>Starting early maximizes benefits</li>
+                        <li>Reinvesting earnings accelerates growth</li>
+                        <li>The '72 Rule' estimates doubling time (72 ÷ rate = years)</li>
+                    </ul>
+                    <h3>Example</h3>
+                    <p>$10,000 invested at 7% for 30 years:</p>
+                    <ul>
+                        <li><strong>Final Amount:</strong> $76,122.55</li>
+                        <li><strong>Interest Earned:</strong> $66,122.55</li>
+                    </ul>
+                    <h3>Tips</h3>
+                    <ul>
+                        <li>💡 Start investing as early as possible</li>
+                        <li>💡 Reinvest dividends and interest</li>
+                        <li>💡 Be patient - compounding takes time</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>For educational purposes only. Not financial advice.</em></p>`,
+
+                retirement: `<h2>🏖️ Retirement Planning</h2>
+                    <p>Long-term financial planning for retirement years.</p>
+                    <h3>Key Points</h3>
+                    <ul>
+                        <li>Start early to maximize compounding</li>
+                        <li>Contribute to employer-matched accounts</li>
+                        <li>Diversify retirement investments</li>
+                        <li>Plan for healthcare costs</li>
+                    </ul>
+                    <h3>Example Projection</h3>
+                    <p>Starting at age 30, retiring at 65:</p>
+                    <ul>
+                        <li>Monthly contribution: $500</li>
+                        <li>Starting savings: $10,000</li>
+                        <li><strong>Projected Total:</strong> $948,602</li>
+                    </ul>
+                    <h3>Tips</h3>
+                    <ul>
+                        <li>💡 Aim to save 15% of income for retirement</li>
+                        <li>💡 Increase contributions with raises</li>
+                        <li>💡 Don't withdraw early</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>For educational purposes only. Not financial advice.</em></p>`,
+
+                debt: `<h2>💳 Debt Management</h2>
+                    <p>Strategies for effectively managing and paying off debt.</p>
+                    <h3>Payoff Methods</h3>
+                    <ul>
+                        <li><strong>Avalanche Method:</strong> Pay highest interest first (saves money)</li>
+                        <li><strong>Snowball Method:</strong> Pay smallest balance first (builds momentum)</li>
+                    </ul>
+                    <h3>Key Tips</h3>
+                    <ul>
+                        <li>💡 List all debts with interest rates</li>
+                        <li>💡 Pay more than minimum when possible</li>
+                        <li>💡 Negotiate lower interest rates</li>
+                        <li>💡 Avoid new debt while paying off existing</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>For educational purposes only. Not financial advice.</em></p>`,
+
+                emergency: `<h2>🚨 Emergency Fund</h2>
+                    <p>Money set aside for unexpected expenses or financial emergencies.</p>
+                    <h3>How Much Do You Need?</h3>
+                    <table>
+                        <tr><th>Situation</th><th>Recommended</th></tr>
+                        <tr><td>Stable job, no dependents</td><td>3 months</td></tr>
+                        <tr><td>Family or variable income</td><td>6 months</td></tr>
+                        <tr><td>Self-employed</td><td>9-12 months</td></tr>
+                    </table>
+                    <h3>Tips</h3>
+                    <ul>
+                        <li>💡 Start with $1,000 mini emergency fund</li>
+                        <li>💡 Automate monthly contributions</li>
+                        <li>💡 Use high-yield savings account</li>
+                        <li>💡 Only use for true emergencies</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>For educational purposes only. Not financial advice.</em></p>`,
+
+                investments: `<h2>📉 Investment Types</h2>
+                    <h3>Stocks</h3>
+                    <p>Ownership shares in companies. High risk, high potential return (7-10% avg).</p>
+                    <h3>Bonds</h3>
+                    <p>Fixed-income lending to governments/corporations. Lower risk (3-5% avg).</p>
+                    <h3>Index Funds</h3>
+                    <p>Track market indexes like S&P 500. Low fees, instant diversification.</p>
+                    <h3>Real Estate</h3>
+                    <p>Property investment. Rental income + appreciation (8-12% avg).</p>
+                    <h3>High-Yield Savings</h3>
+                    <p>Bank accounts with higher interest. Very safe, liquid (4-5% current).</p>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>For educational purposes only. Not financial advice.</em></p>`
+            },
+            ko: {
+                budget: `<h2>📊 예산 관리 (50/30/20 법칙)</h2>
+                    <p>간단한 예산 프레임워크: 필수 지출 50%, 원하는 것 30%, 저축 20%.</p>
+                    <h3>핵심 포인트</h3>
+                    <ul>
+                        <li><strong>50% - 필수:</strong> 월세, 공과금, 식비, 보험</li>
+                        <li><strong>30% - 원하는 것:</strong> 오락, 외식, 취미</li>
+                        <li><strong>20% - 저축:</strong> 비상 자금, 은퇴, 투자</li>
+                    </ul>
+                    <h3>팁</h3>
+                    <ul>
+                        <li>💡 먼저 한 달간 지출을 추적하세요</li>
+                        <li>💡 예산 앱을 활용하세요</li>
+                        <li>💡 매월 검토하고 조정하세요</li>
+                        <li>💡 저축을 자동화하세요</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>교육 목적으로만 제공됩니다. 재정 조언이 아닙니다.</em></p>`,
+
+                compound: `<h2>📈 복리</h2>
+                    <p>원금과 이전 기간에 축적된 이자 모두에 대해 계산되는 이자입니다.</p>
+                    <h3>핵심 포인트</h3>
+                    <ul>
+                        <li>시간이 지남에 따라 돈이 기하급수적으로 증가합니다</li>
+                        <li>일찍 시작할수록 혜택이 극대화됩니다</li>
+                        <li>수익 재투자가 성장을 가속화합니다</li>
+                        <li>'72의 법칙'으로 자산 2배 기간을 추정 (72 ÷ 수익률 = 년)</li>
+                    </ul>
+                    <h3>예시</h3>
+                    <p>1,000만원을 7%로 30년 투자:</p>
+                    <ul>
+                        <li><strong>최종 금액:</strong> 7,612만원</li>
+                        <li><strong>이자 수익:</strong> 6,612만원</li>
+                    </ul>
+                    <h3>팁</h3>
+                    <ul>
+                        <li>💡 가능한 한 빨리 투자를 시작하세요</li>
+                        <li>💡 배당금과 이자를 재투자하세요</li>
+                        <li>💡 인내심을 가지세요 - 복리에는 시간이 필요합니다</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>교육 목적으로만 제공됩니다. 재정 조언이 아닙니다.</em></p>`,
+
+                retirement: `<h2>🏖️ 은퇴 계획</h2>
+                    <p>은퇴 후를 위한 장기 재무 계획입니다.</p>
+                    <h3>핵심 포인트</h3>
+                    <ul>
+                        <li>복리 효과 극대화를 위해 일찍 시작하세요</li>
+                        <li>회사 매칭 계좌에 기여하세요</li>
+                        <li>은퇴 투자를 분산하세요</li>
+                        <li>의료비를 계획하세요</li>
+                    </ul>
+                    <h3>예상 시뮬레이션</h3>
+                    <p>30세에 시작, 65세 은퇴:</p>
+                    <ul>
+                        <li>월 기여금: 50만원</li>
+                        <li>시작 저축: 1,000만원</li>
+                        <li><strong>예상 총액:</strong> 9억 4,860만원</li>
+                    </ul>
+                    <h3>팁</h3>
+                    <ul>
+                        <li>💡 소득의 15%를 은퇴 저축 목표로 하세요</li>
+                        <li>💡 급여 인상 시 기여금을 늘리세요</li>
+                        <li>💡 조기 인출을 피하세요</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>교육 목적으로만 제공됩니다. 재정 조언이 아닙니다.</em></p>`,
+
+                debt: `<h2>💳 부채 관리</h2>
+                    <p>부채를 효과적으로 관리하고 상환하기 위한 전략입니다.</p>
+                    <h3>상환 방법</h3>
+                    <ul>
+                        <li><strong>눈사태 방식:</strong> 고금리 부채 먼저 상환 (돈 절약)</li>
+                        <li><strong>눈덩이 방식:</strong> 작은 잔액 먼저 상환 (동기 부여)</li>
+                    </ul>
+                    <h3>핵심 팁</h3>
+                    <ul>
+                        <li>💡 모든 부채와 금리를 목록화하세요</li>
+                        <li>💡 가능하면 최소 금액 이상 상환하세요</li>
+                        <li>💡 낮은 금리로 협상하세요</li>
+                        <li>💡 상환 중 새로운 부채 피하기</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>교육 목적으로만 제공됩니다. 재정 조언이 아닙니다.</em></p>`,
+
+                emergency: `<h2>🚨 비상 자금</h2>
+                    <p>예상치 못한 지출이나 금융 비상 상황을 위해 따로 모아둔 돈입니다.</p>
+                    <h3>얼마나 필요한가요?</h3>
+                    <table>
+                        <tr><th>상황</th><th>권장</th></tr>
+                        <tr><td>안정적인 직장, 부양가족 없음</td><td>3개월</td></tr>
+                        <tr><td>가족 또는 변동 소득</td><td>6개월</td></tr>
+                        <tr><td>자영업</td><td>9-12개월</td></tr>
+                    </table>
+                    <h3>팁</h3>
+                    <ul>
+                        <li>💡 100만원 미니 비상 자금부터 시작하세요</li>
+                        <li>💡 월별 자동 이체를 설정하세요</li>
+                        <li>💡 고금리 저축 계좌를 활용하세요</li>
+                        <li>💡 진정한 비상 상황에만 사용하세요</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>교육 목적으로만 제공됩니다. 재정 조언이 아닙니다.</em></p>`,
+
+                investments: `<h2>📉 투자 유형</h2>
+                    <h3>주식</h3>
+                    <p>회사의 소유 지분. 높은 리스크, 높은 잠재 수익률 (평균 7-10%).</p>
+                    <h3>채권</h3>
+                    <p>정부/기업에 대한 고정 수익 대출. 낮은 리스크 (평균 3-5%).</p>
+                    <h3>인덱스 펀드</h3>
+                    <p>S&P 500과 같은 시장 지수 추종. 낮은 수수료, 즉각적인 분산.</p>
+                    <h3>부동산</h3>
+                    <p>부동산 투자. 임대 수익 + 가치 상승 (평균 8-12%).</p>
+                    <h3>고금리 저축</h3>
+                    <p>높은 이자의 은행 계좌. 매우 안전, 유동적 (현재 4-5%).</p>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>교육 목적으로만 제공됩니다. 재정 조언이 아닙니다.</em></p>`
+            },
+            ja: {
+                budget: `<h2>📊 予算管理（50/30/20ルール）</h2>
+                    <p>シンプルな予算フレームワーク：必需品50%、欲しいもの30%、貯蓄20%。</p>
+                    <h3>キーポイント</h3>
+                    <ul>
+                        <li><strong>50% - 必需品:</strong> 家賃、光熱費、食費、保険</li>
+                        <li><strong>30% - 欲しいもの:</strong> 娯楽、外食、趣味</li>
+                        <li><strong>20% - 貯蓄:</strong> 緊急資金、退職、投資</li>
+                    </ul>
+                    <h3>ヒント</h3>
+                    <ul>
+                        <li>💡 まず1ヶ月間支出を追跡しましょう</li>
+                        <li>💡 予算アプリを活用しましょう</li>
+                        <li>💡 毎月見直して調整しましょう</li>
+                        <li>💡 貯蓄を自動化しましょう</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>教育目的のみです。財務アドバイスではありません。</em></p>`,
+
+                compound: `<h2>📈 複利</h2>
+                    <p>元本と過去の期間に蓄積された利子の両方に対して計算される利子です。</p>
+                    <h3>キーポイント</h3>
+                    <ul>
+                        <li>時間とともにお金は指数関数的に増加します</li>
+                        <li>早く始めるほど利益が最大化されます</li>
+                        <li>収益の再投資が成長を加速させます</li>
+                        <li>「72の法則」で倍増期間を推定（72÷利率=年数）</li>
+                    </ul>
+                    <h3>例</h3>
+                    <p>100万円を7%で30年投資:</p>
+                    <ul>
+                        <li><strong>最終金額:</strong> 761万円</li>
+                        <li><strong>利息収入:</strong> 661万円</li>
+                    </ul>
+                    <h3>ヒント</h3>
+                    <ul>
+                        <li>💡 できるだけ早く投資を始めましょう</li>
+                        <li>💡 配当と利子を再投資しましょう</li>
+                        <li>💡 忍耐強く - 複利には時間がかかります</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>教育目的のみです。財務アドバイスではありません。</em></p>`,
+
+                retirement: `<h2>🏖️ 退職計画</h2>
+                    <p>退職後のための長期的な財務計画です。</p>
+                    <h3>キーポイント</h3>
+                    <ul>
+                        <li>複利効果を最大化するために早く始めましょう</li>
+                        <li>会社のマッチング口座に拠出しましょう</li>
+                        <li>退職投資を分散しましょう</li>
+                        <li>医療費を計画しましょう</li>
+                    </ul>
+                    <h3>予測シミュレーション</h3>
+                    <p>30歳で開始、65歳で退職:</p>
+                    <ul>
+                        <li>毎月の拠出: 5万円</li>
+                        <li>開始時の貯蓄: 100万円</li>
+                        <li><strong>予測総額:</strong> 9,486万円</li>
+                    </ul>
+                    <h3>ヒント</h3>
+                    <ul>
+                        <li>💡 収入の15%を退職貯蓄の目標にしましょう</li>
+                        <li>💡 昇給時に拠出額を増やしましょう</li>
+                        <li>💡 早期引き出しを避けましょう</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>教育目的のみです。財務アドバイスではありません。</em></p>`,
+
+                debt: `<h2>💳 債務管理</h2>
+                    <p>効果的に借金を管理し返済するための戦略です。</p>
+                    <h3>返済方法</h3>
+                    <ul>
+                        <li><strong>アバランチ法:</strong> 高金利から先に返済（お金を節約）</li>
+                        <li><strong>スノーボール法:</strong> 最小残高から先に返済（モチベーション向上）</li>
+                    </ul>
+                    <h3>主要なヒント</h3>
+                    <ul>
+                        <li>💡 すべての借金と金利をリストアップしましょう</li>
+                        <li>💡 可能な限り最低額以上を支払いましょう</li>
+                        <li>💡 低い金利に交渉しましょう</li>
+                        <li>💡 返済中は新たな借金を避ける</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>教育目的のみです。財務アドバイスではありません。</em></p>`,
+
+                emergency: `<h2>🚨 緊急資金</h2>
+                    <p>予期せぬ出費や金融緊急事態のために取っておくお金です。</p>
+                    <h3>いくら必要ですか？</h3>
+                    <table>
+                        <tr><th>状況</th><th>推奨</th></tr>
+                        <tr><td>安定した仕事、扶養家族なし</td><td>3ヶ月</td></tr>
+                        <tr><td>家族または変動収入</td><td>6ヶ月</td></tr>
+                        <tr><td>自営業</td><td>9-12ヶ月</td></tr>
+                    </table>
+                    <h3>ヒント</h3>
+                    <ul>
+                        <li>💡 10万円のミニ緊急資金から始めましょう</li>
+                        <li>💡 毎月の自動積立を設定しましょう</li>
+                        <li>💡 高金利の普通預金口座を活用しましょう</li>
+                        <li>💡 本当の緊急事態にのみ使用しましょう</li>
+                    </ul>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>教育目的のみです。財務アドバイスではありません。</em></p>`,
+
+                investments: `<h2>📉 投資タイプ</h2>
+                    <h3>株式</h3>
+                    <p>企業の所有株式。高リスク、高い潜在リターン（平均7-10%）。</p>
+                    <h3>債券</h3>
+                    <p>政府/企業への固定収入貸付。低リスク（平均3-5%）。</p>
+                    <h3>インデックスファンド</h3>
+                    <p>S&P 500などの市場指数に連動。低手数料、即座の分散。</p>
+                    <h3>不動産</h3>
+                    <p>不動産投資。賃貸収入+価値上昇（平均8-12%）。</p>
+                    <h3>高金利預金</h3>
+                    <p>高金利の銀行口座。非常に安全、流動的（現在4-5%）。</p>
+                    <p style="margin-top: 15px; font-size: 0.85rem; color: #666;">⚠️ <em>教育目的のみです。財務アドバイスではありません。</em></p>`
+            }
+        };
+
+        function setLanguage(lang) {
+            currentLang = lang;
+            const data = i18n[lang];
+
+            // Update UI
+            document.getElementById('headerDesc').textContent = data.headerDesc;
+            document.getElementById('disclaimer').innerHTML = data.disclaimer;
+            document.getElementById('chatTitle').textContent = data.chatTitle;
+            document.getElementById('messageInput').placeholder = data.placeholder;
+            document.getElementById('sendBtn').textContent = data.send;
+            document.getElementById('footerDisclaimer').textContent = data.footerDisclaimer;
+
+            // Update language buttons
+            document.querySelectorAll('.lang-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update quick actions
+            const quickActionsHtml = data.quickActions.map(action =>
+                `<button class="quick-btn" onclick="sendQuickMessage('${action.msg}')">${action.label}</button>`
+            ).join('');
+            document.getElementById('quickActions').innerHTML = quickActionsHtml;
+
+            // Update features
+            const featuresHtml = data.features.map(feature =>
+                `<div class="feature-card">
+                    <div class="feature-icon">${feature.icon}</div>
+                    <h3>${feature.title}</h3>
+                    <p>${feature.desc}</p>
+                </div>`
+            ).join('');
+            document.getElementById('features').innerHTML = featuresHtml;
+
+            // Clear and show welcome message
+            chatMessages.innerHTML = '';
+            addMessage(data.welcome, false);
+        }
+
+        function getResponse(message) {
+            const lower = message.toLowerCase();
+            const lang = currentLang;
+            const resp = responses[lang];
+
+            if (lower.includes('budget') || lower.includes('50/30/20') || lower.includes('예산') || lower.includes('予算')) {
+                return resp.budget;
+            }
+            if (lower.includes('compound') || lower.includes('복리') || lower.includes('複利')) {
+                return resp.compound;
+            }
+            if (lower.includes('retire') || lower.includes('은퇴') || lower.includes('退職')) {
+                return resp.retirement;
+            }
+            if (lower.includes('debt') || lower.includes('부채') || lower.includes('借金') || lower.includes('payoff')) {
+                return resp.debt;
+            }
+            if (lower.includes('emergency') || lower.includes('비상') || lower.includes('緊急')) {
+                return resp.emergency;
+            }
+            if (lower.includes('invest') || lower.includes('투자') || lower.includes('投資') || lower.includes('stock') || lower.includes('bond')) {
+                return resp.investments;
+            }
+
+            return i18n[lang].welcome;
+        }
+
+        function addMessage(content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+
+            if (isUser) {
+                contentDiv.textContent = content;
+            } else {
+                contentDiv.innerHTML = content;
+            }
+
+            messageDiv.appendChild(contentDiv);
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function showTyping() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'message bot';
+            typingDiv.id = 'typing';
+            typingDiv.innerHTML = `
+                <div class="message-content">
+                    <div class="typing-indicator">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                </div>
+            `;
+            chatMessages.appendChild(typingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function removeTyping() {
+            const typing = document.getElementById('typing');
+            if (typing) typing.remove();
+        }
+
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            addMessage(message, true);
+            messageInput.value = '';
+
+            showTyping();
+
+            setTimeout(() => {
+                removeTyping();
+                const response = getResponse(message);
+                addMessage(response, false);
+            }, 800 + Math.random() * 400);
+        }
+
+        function sendQuickMessage(message) {
+            messageInput.value = message;
+            sendMessage();
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        // Initialize with English
+        document.addEventListener('DOMContentLoaded', () => {
+            setLanguage('en');
+        });
+    </script>
+</body>
+</html>
