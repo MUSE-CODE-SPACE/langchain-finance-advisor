@@ -1,42 +1,102 @@
 """
-Finance Agent - LangChain agent for personal finance assistance
-DISCLAIMER: For educational purposes only. Not financial advice.
+Finance Agent - LangChain 0.3 agent for the personal-finance education app.
+
+DISCLAIMER: This module powers an *educational* assistant. It is NOT a
+substitute for personalised financial advice from a licensed professional.
+
+Two execution modes are supported, chosen automatically (or via the
+``LLM_PROVIDER`` environment variable):
+
+- ``anthropic`` — uses ChatAnthropic (Claude) when ``ANTHROPIC_API_KEY`` is set
+- ``openai`` — uses ChatOpenAI (GPT) when ``OPENAI_API_KEY`` is set
+- ``none`` — graceful fallback to a deterministic keyword router (no network)
+
+Whenever a response involves a specific recommendation (budget plan, investment
+advice, debt payoff plan, large purchase, retirement projection, etc.), the
+"NOT financial advice" disclaimer is appended to the final answer.
 """
 
-import json
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+
+import logging
+import os
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.memory import ConversationBufferWindowMemory
-
-from app.tools.finance_tools import get_finance_tools, DISCLAIMER
 from app.data.finance_knowledge import (
-    CONCEPTS_DB, INVESTMENTS_DB, BUDGET_CATEGORIES,
-    calculate_compound_interest, calculate_retirement_savings,
-    calculate_loan_payment, get_budget_recommendation,
-    RiskLevel
+    BUDGET_CATEGORIES,
+    CONCEPTS_DB,
+    INVESTMENTS_DB,
+    calculate_compound_interest,
+    calculate_retirement_savings,
+)
+from app.tools.finance_tools import DISCLAIMER, get_finance_tools
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.tools import BaseTool
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+
+
+# Topics that should always carry the financial-advice disclaimer.
+ADVISORY_KEYWORDS: tuple[str, ...] = (
+    "invest",
+    "stock",
+    "bond",
+    "fund",
+    "portfolio",
+    "buy",
+    "sell",
+    "should i",
+    "recommend",
+    "advice",
+    "loan",
+    "mortgage",
+    "debt",
+    "payoff",
+    "retirement",
+    "401k",
+    "ira",
+    "savings",
+    "budget",
+    "house",
+    "car",
+    "crypto",
+    "주식",
+    "투자",
+    "대출",
+    "은퇴",
+    "부채",
+    "예산",
+    "株",
+    "投資",
+    "退職",
+    "借金",
+    "ローン",
+    "予算",
 )
 
 
-# i18n Messages
-MESSAGES = {
+MESSAGES: dict[str, dict[str, Any]] = {
     "en": {
         "welcome": "Personal Finance Advisor",
         "welcome_desc": "I can help you with financial education and planning.",
-        "disclaimer": "DISCLAIMER: This is for educational purposes only. Not financial advice.",
+        "disclaimer": "DISCLAIMER: This is for educational purposes only. NOT financial advice.",
         "features": {
             "budget": "Budget Planning",
             "savings": "Savings Goals",
             "retirement": "Retirement Calculator",
             "investment": "Investment Education",
             "debt": "Debt Management",
-            "emergency": "Emergency Fund"
+            "emergency": "Emergency Fund",
         },
         "ask": "What would you like to learn about?",
-        "not_found": "I couldn't find specific information about that.",
-        "try_asking": "Try asking about"
     },
     "ko": {
         "welcome": "개인 금융 어드바이저",
@@ -48,11 +108,9 @@ MESSAGES = {
             "retirement": "은퇴 계산기",
             "investment": "투자 교육",
             "debt": "부채 관리",
-            "emergency": "비상 자금"
+            "emergency": "비상 자금",
         },
         "ask": "무엇에 대해 알고 싶으신가요?",
-        "not_found": "해당 정보를 찾을 수 없습니다.",
-        "try_asking": "다음에 대해 물어보세요"
     },
     "ja": {
         "welcome": "パーソナルファイナンスアドバイザー",
@@ -64,451 +122,565 @@ MESSAGES = {
             "retirement": "退職計算機",
             "investment": "投資教育",
             "debt": "債務管理",
-            "emergency": "緊急資金"
+            "emergency": "緊急資金",
         },
         "ask": "何について知りたいですか？",
-        "not_found": "その情報は見つかりませんでした。",
-        "try_asking": "次について質問してみてください"
-    }
+    },
 }
+
+
+SYSTEM_PROMPT = """You are a careful, plain-spoken *personal-finance education* assistant.
+
+CRITICAL DISCLAIMER (read every turn):
+- You are NOT a licensed financial advisor and do NOT provide personalised
+  financial, tax, legal, or investment advice.
+- The information you share is GENERAL and EDUCATIONAL only.
+- For specific recommendations (investing a specific amount, paying off a
+  specific debt, retirement product selection, large purchases like a house or
+  car, choosing between insurance products), you ALWAYS remind the user that
+  they should consult a licensed financial advisor.
+- Never quote live market prices, never promise returns, never recommend
+  specific tickers or specific brokerages, and never claim something is
+  "guaranteed" or "risk-free".
+
+How you should respond:
+1. Be warm, concrete, and concise.
+2. Use the provided tools when they fit — budget_planner, compound_interest_calculator,
+   retirement_calculator, investment_education, debt_payoff_calculator,
+   emergency_fund_calculator, loan_calculator, financial_concept,
+   budget_categories_overview. Prefer tools over free-form recall for numbers.
+3. Always append a one-line "NOT financial advice — consult a licensed advisor"
+   reminder whenever the response includes a specific recommendation involving
+   money (investments, debt, large purchases, retirement projections, budget
+   plans).
+4. Support the user's language: respond in English, Korean (한국어), or
+   Japanese (日本語) according to the user's message.
+"""
 
 
 @dataclass
 class FinanceContext:
-    """Maintains finance session context."""
+    """Lightweight session context for the finance advisor."""
+
     user_id: str = "default"
     language: str = "en"
-    monthly_income: Optional[float] = None
-    monthly_expenses: Optional[float] = None
-    savings_goal: Optional[float] = None
+    income: float | None = None
+    goals: list[str] = field(default_factory=list)
     risk_tolerance: str = "moderate"
-    discussed_topics: List[str] = field(default_factory=list)
+    discussed_topics: list[str] = field(default_factory=list)
+
+
+def _resolve_llm() -> tuple[str, BaseChatModel | None]:
+    """Return ``(mode, llm)`` based on environment configuration.
+
+    ``mode`` is one of ``"anthropic" | "openai" | "none"``.
+    """
+    provider = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
+
+    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+
+    if provider == "none":
+        return "none", None
+
+    if not provider:
+        if has_anthropic:
+            provider = "anthropic"
+        elif has_openai:
+            provider = "openai"
+        else:
+            return "none", None
+
+    try:
+        if provider == "anthropic":
+            if not has_anthropic:
+                logger.warning("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is missing.")
+                return "none", None
+            from langchain_anthropic import ChatAnthropic
+
+            model = os.environ.get("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
+            return "anthropic", ChatAnthropic(model=model, temperature=0.2, max_tokens=1024)
+
+        if provider == "openai":
+            if not has_openai:
+                logger.warning("LLM_PROVIDER=openai but OPENAI_API_KEY is missing.")
+                return "none", None
+            from langchain_openai import ChatOpenAI
+
+            model = os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+            return "openai", ChatOpenAI(model=model, temperature=0.2)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to construct LLM for provider %s: %s", provider, exc)
+        return "none", None
+
+    logger.warning("Unknown LLM_PROVIDER=%s; falling back to keyword router.", provider)
+    return "none", None
 
 
 class FinanceAdvisorAgent:
-    """
-    Personal finance education assistant that can:
-    - Explain financial concepts
-    - Calculate compound interest
-    - Project retirement savings
-    - Create budget recommendations
-    - Explain investment types
-    - Calculate loan payments
-    - Help with debt payoff planning
+    """Personal finance education assistant with optional LLM tool-calling."""
 
-    IMPORTANT: This is NOT a substitute for professional financial advice.
-    """
+    SYSTEM_PROMPT = SYSTEM_PROMPT
 
-    def __init__(self, llm=None, verbose: bool = False, language: str = "en"):
-        """Initialize the finance advisor agent."""
-        self.llm = llm
+    def __init__(
+        self,
+        llm: BaseChatModel | None = None,
+        verbose: bool = False,
+        language: str = "en",
+        history_window: int = 10,
+    ) -> None:
         self.verbose = verbose
-        self.language = language
-        self.context = FinanceContext(language=language)
-        self.conversation_history: List[Dict[str, str]] = []
-        self.tools = get_finance_tools()
-        self.messages = MESSAGES.get(language, MESSAGES["en"])
+        self.language = language if language in MESSAGES else "en"
+        self.context = FinanceContext(language=self.language)
+        self.conversation_history: list[dict[str, str]] = []
+        self._recent_turns: deque[tuple[str, str]] = deque(maxlen=history_window * 2)
+        self.tools: list[BaseTool] = get_finance_tools()
 
-        self.memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            k=10
+        if llm is not None:
+            self.llm: BaseChatModel | None = llm
+            self.mode = "custom"
+        else:
+            self.mode, self.llm = _resolve_llm()
+
+        self._agent_executor: Any | None = (
+            self._build_agent_executor() if self.llm is not None else None
         )
 
-    def set_language(self, lang: str):
-        """Set the language for responses."""
+    # ------------------------------------------------------------------ public
+
+    @property
+    def llm_enabled(self) -> bool:
+        """``True`` if requests are answered by an LLM-backed agent."""
+        return self._agent_executor is not None
+
+    def set_language(self, lang: str) -> None:
+        """Update the response language for this session."""
         if lang in MESSAGES:
             self.language = lang
             self.context.language = lang
-            self.messages = MESSAGES[lang]
 
     def chat(self, user_message: str) -> str:
-        """Process user message and generate response."""
+        """Process a user message and return the assistant response."""
+        self._append_history("user", user_message)
 
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_message,
-            "timestamp": datetime.now().isoformat()
-        })
+        try:
+            if self._agent_executor is not None:
+                response = self._llm_response(user_message)
+            else:
+                response = self._keyword_router(user_message)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Agent failed; falling back to keyword router: %s", exc)
+            response = self._keyword_router(user_message)
 
-        response = self._generate_response(user_message)
-
-        self.conversation_history.append({
-            "role": "assistant",
-            "content": response,
-            "timestamp": datetime.now().isoformat()
-        })
-
+        response = self._maybe_append_disclaimer(user_message, response)
+        self._append_history("assistant", response)
         return response
 
-    def _generate_response(self, message: str) -> str:
-        """Generate appropriate finance response."""
-        message_lower = message.lower()
-        lang = self.language
-
-        # Budget queries
-        if any(word in message_lower for word in ['budget', '예산', '予算', '50/30/20']):
-            return self._handle_budget_query(message)
-
-        # Compound interest
-        if any(word in message_lower for word in ['compound', '복리', '複利', 'interest']):
-            return self._handle_compound_interest_query(message)
-
-        # Retirement
-        if any(word in message_lower for word in ['retire', '은퇴', '退職', 'pension', '연금', '年金']):
-            return self._handle_retirement_query(message)
-
-        # Investment
-        if any(word in message_lower for word in ['invest', '투자', '投資', 'stock', '주식', '株', 'bond', '채권', '債券']):
-            return self._handle_investment_query(message)
-
-        # Debt
-        if any(word in message_lower for word in ['debt', '부채', '借金', 'loan', '대출', 'ローン', 'payoff']):
-            return self._handle_debt_query(message)
-
-        # Emergency fund
-        if any(word in message_lower for word in ['emergency', '비상', '緊急', 'fund', '자금', '資金']):
-            return self._handle_emergency_fund_query(message)
-
-        # Savings
-        if any(word in message_lower for word in ['save', 'saving', '저축', '貯蓄', 'goal']):
-            return self._handle_savings_query(message)
-
-        # Diversification
-        if any(word in message_lower for word in ['diversif', '분산', '分散']):
-            return self._handle_concept_query("diversification")
-
-        # Default
-        return self._handle_general_query(message)
-
-    def _handle_budget_query(self, message: str) -> str:
-        """Handle budget-related queries."""
-        lang = self.language
-        concept = CONCEPTS_DB.get("budgeting")
-
-        response = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
-        response += f"{concept.description.get(lang, concept.description['en'])}\n\n"
-
-        response += "## " + ("Key Points" if lang == "en" else "핵심 포인트" if lang == "ko" else "キーポイント") + "\n\n"
-        for point in concept.key_points.get(lang, concept.key_points['en']):
-            response += f"- {point}\n"
-
-        response += "\n## " + ("Budget Categories" if lang == "en" else "예산 카테고리" if lang == "ko" else "予算カテゴリ") + "\n\n"
-        for cat in BUDGET_CATEGORIES:
-            response += f"**{cat.name.get(lang, cat.name['en'])}** - {cat.recommended_percent}%\n"
-            response += f"  {cat.description.get(lang, cat.description['en'])}\n\n"
-
-        response += "\n---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_compound_interest_query(self, message: str) -> str:
-        """Handle compound interest queries."""
-        lang = self.language
-        concept = CONCEPTS_DB.get("compound_interest")
-
-        response = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
-        response += f"{concept.description.get(lang, concept.description['en'])}\n\n"
-
-        response += "## " + ("Key Points" if lang == "en" else "핵심 포인트" if lang == "ko" else "キーポイント") + "\n\n"
-        for point in concept.key_points.get(lang, concept.key_points['en']):
-            response += f"- {point}\n"
-
-        # Example calculation
-        example = calculate_compound_interest(10000, 7, 30, 12)
-        response += "\n## " + ("Example" if lang == "en" else "예시" if lang == "ko" else "例") + "\n\n"
-
-        if lang == "en":
-            response += f"$10,000 invested at 7% for 30 years:\n"
-            response += f"- **Final Amount:** ${example['final_amount']:,.2f}\n"
-            response += f"- **Interest Earned:** ${example['interest_earned']:,.2f}\n"
-        elif lang == "ko":
-            response += f"1,000만원을 7%로 30년 투자:\n"
-            response += f"- **최종 금액:** {example['final_amount']*100:,.0f}원\n"
-            response += f"- **이자 수익:** {example['interest_earned']*100:,.0f}원\n"
-        else:
-            response += f"100万円を7%で30年投資:\n"
-            response += f"- **最終金額:** {example['final_amount']*100:,.0f}円\n"
-            response += f"- **利息収入:** {example['interest_earned']*100:,.0f}円\n"
-
-        response += "\n## " + ("Tips" if lang == "en" else "팁" if lang == "ko" else "ヒント") + "\n\n"
-        for tip in concept.tips.get(lang, concept.tips['en']):
-            response += f"💡 {tip}\n"
-
-        response += "\n---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_retirement_query(self, message: str) -> str:
-        """Handle retirement planning queries."""
-        lang = self.language
-        concept = CONCEPTS_DB.get("retirement_planning")
-
-        response = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
-        response += f"{concept.description.get(lang, concept.description['en'])}\n\n"
-
-        response += "## " + ("Key Points" if lang == "en" else "핵심 포인트" if lang == "ko" else "キーポイント") + "\n\n"
-        for point in concept.key_points.get(lang, concept.key_points['en']):
-            response += f"- {point}\n"
-
-        # Example calculation
-        example = calculate_retirement_savings(30, 65, 500, 10000, 7)
-        response += "\n## " + ("Example Projection" if lang == "en" else "예상 시뮬레이션" if lang == "ko" else "予測シミュレーション") + "\n\n"
-
-        if lang == "en":
-            response += f"Starting at age 30, retiring at 65:\n"
-            response += f"- Monthly contribution: $500\n"
-            response += f"- Starting savings: $10,000\n"
-            response += f"- **Projected Total:** ${example['projected_total']:,.2f}\n"
-            response += f"- **Investment Growth:** ${example['investment_growth']:,.2f}\n"
-        elif lang == "ko":
-            response += f"30세에 시작, 65세 은퇴:\n"
-            response += f"- 월 기여금: 50만원\n"
-            response += f"- 시작 저축: 1,000만원\n"
-            response += f"- **예상 총액:** {example['projected_total']*100:,.0f}원\n"
-            response += f"- **투자 성장:** {example['investment_growth']*100:,.0f}원\n"
-        else:
-            response += f"30歳で開始、65歳で退職:\n"
-            response += f"- 毎月の拠出: 5万円\n"
-            response += f"- 開始時の貯蓄: 100万円\n"
-            response += f"- **予測総額:** {example['projected_total']*100:,.0f}円\n"
-            response += f"- **投資成長:** {example['investment_growth']*100:,.0f}円\n"
-
-        response += "\n## " + ("Tips" if lang == "en" else "팁" if lang == "ko" else "ヒント") + "\n\n"
-        for tip in concept.tips.get(lang, concept.tips['en']):
-            response += f"💡 {tip}\n"
-
-        response += "\n---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_investment_query(self, message: str) -> str:
-        """Handle investment-related queries."""
-        lang = self.language
-        message_lower = message.lower()
-
-        # Check for specific investment type
-        for inv_id, inv in INVESTMENTS_DB.items():
-            if inv_id in message_lower or any(name.lower() in message_lower for name in inv.name.values()):
-                response = f"# {inv.name.get(lang, inv.name['en'])}\n\n"
-                response += f"{inv.description.get(lang, inv.description['en'])}\n\n"
-                response += f"**" + ("Risk Level" if lang == "en" else "리스크 수준" if lang == "ko" else "リスクレベル") + f":** {inv.risk_level.value.title()}\n"
-                response += f"**" + ("Typical Returns" if lang == "en" else "일반적인 수익률" if lang == "ko" else "典型的なリターン") + f":** {inv.typical_returns}\n\n"
-
-                response += "## " + ("Pros" if lang == "en" else "장점" if lang == "ko" else "メリット") + "\n"
-                for pro in inv.pros.get(lang, inv.pros['en']):
-                    response += f"✅ {pro}\n"
-
-                response += "\n## " + ("Cons" if lang == "en" else "단점" if lang == "ko" else "デメリット") + "\n"
-                for con in inv.cons.get(lang, inv.cons['en']):
-                    response += f"⚠️ {con}\n"
-
-                response += "\n## " + ("Best For" if lang == "en" else "추천 대상" if lang == "ko" else "おすすめの対象") + "\n"
-                for best in inv.best_for.get(lang, inv.best_for['en']):
-                    response += f"- {best}\n"
-
-                response += "\n---\n"
-                response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-                return response
-
-        # General investment overview
-        response = "# " + ("Investment Types" if lang == "en" else "투자 유형" if lang == "ko" else "投資タイプ") + "\n\n"
-
-        for inv in INVESTMENTS_DB.values():
-            response += f"### {inv.name.get(lang, inv.name['en'])}\n"
-            response += f"{inv.description.get(lang, inv.description['en'])}\n"
-            response += f"*" + ("Risk" if lang == "en" else "리스크" if lang == "ko" else "リスク") + f": {inv.risk_level.value.title()}*\n\n"
-
-        response += "---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_debt_query(self, message: str) -> str:
-        """Handle debt management queries."""
-        lang = self.language
-        concept = CONCEPTS_DB.get("debt_management")
-
-        response = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
-        response += f"{concept.description.get(lang, concept.description['en'])}\n\n"
-
-        response += "## " + ("Key Strategies" if lang == "en" else "핵심 전략" if lang == "ko" else "主要戦略") + "\n\n"
-        for point in concept.key_points.get(lang, concept.key_points['en']):
-            response += f"- {point}\n"
-
-        response += "\n## " + ("Debt Payoff Methods" if lang == "en" else "부채 상환 방법" if lang == "ko" else "借金返済方法") + "\n\n"
-
-        if lang == "en":
-            response += "**Avalanche Method:** Pay highest interest first (saves money)\n"
-            response += "**Snowball Method:** Pay smallest balance first (builds momentum)\n"
-        elif lang == "ko":
-            response += "**눈사태 방식:** 고금리 부채 먼저 상환 (돈 절약)\n"
-            response += "**눈덩이 방식:** 작은 잔액 먼저 상환 (동기 부여)\n"
-        else:
-            response += "**アバランチ法:** 高金利から先に返済（お金を節約）\n"
-            response += "**スノーボール法:** 最小残高から先に返済（モチベーション向上）\n"
-
-        response += "\n## " + ("Tips" if lang == "en" else "팁" if lang == "ko" else "ヒント") + "\n\n"
-        for tip in concept.tips.get(lang, concept.tips['en']):
-            response += f"💡 {tip}\n"
-
-        response += "\n---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_emergency_fund_query(self, message: str) -> str:
-        """Handle emergency fund queries."""
-        lang = self.language
-        concept = CONCEPTS_DB.get("emergency_fund")
-
-        response = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
-        response += f"{concept.description.get(lang, concept.description['en'])}\n\n"
-
-        response += "## " + ("Key Points" if lang == "en" else "핵심 포인트" if lang == "ko" else "キーポイント") + "\n\n"
-        for point in concept.key_points.get(lang, concept.key_points['en']):
-            response += f"- {point}\n"
-
-        response += "\n## " + ("How Much Do You Need?" if lang == "en" else "얼마나 필요한가요?" if lang == "ko" else "いくら必要ですか？") + "\n\n"
-
-        if lang == "en":
-            response += "| Situation | Recommended |\n"
-            response += "|-----------|-------------|\n"
-            response += "| Stable job, no dependents | 3 months |\n"
-            response += "| Family or variable income | 6 months |\n"
-            response += "| Self-employed | 9-12 months |\n"
-        elif lang == "ko":
-            response += "| 상황 | 권장 |\n"
-            response += "|------|------|\n"
-            response += "| 안정적인 직장, 부양가족 없음 | 3개월 |\n"
-            response += "| 가족 또는 변동 소득 | 6개월 |\n"
-            response += "| 자영업 | 9-12개월 |\n"
-        else:
-            response += "| 状況 | 推奨 |\n"
-            response += "|------|------|\n"
-            response += "| 安定した仕事、扶養家族なし | 3ヶ月 |\n"
-            response += "| 家族または変動収入 | 6ヶ月 |\n"
-            response += "| 自営業 | 9-12ヶ月 |\n"
-
-        response += "\n## " + ("Tips" if lang == "en" else "팁" if lang == "ko" else "ヒント") + "\n\n"
-        for tip in concept.tips.get(lang, concept.tips['en']):
-            response += f"💡 {tip}\n"
-
-        response += "\n---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_savings_query(self, message: str) -> str:
-        """Handle savings-related queries."""
-        lang = self.language
-
-        response = "# " + ("Savings Strategies" if lang == "en" else "저축 전략" if lang == "ko" else "貯蓄戦略") + "\n\n"
-
-        if lang == "en":
-            response += "## Pay Yourself First\n"
-            response += "Save a portion of income before spending on anything else.\n\n"
-            response += "## Automation Tips\n"
-            response += "- Set up automatic transfers to savings\n"
-            response += "- Use apps that round up purchases\n"
-            response += "- Increase savings with each raise\n\n"
-            response += "## Common Savings Goals\n"
-            response += "1. Emergency Fund (3-6 months expenses)\n"
-            response += "2. Retirement (15% of income)\n"
-            response += "3. Major Purchases (house, car)\n"
-            response += "4. Education\n"
-            response += "5. Travel/Personal Goals\n"
-        elif lang == "ko":
-            response += "## 자신에게 먼저 지불하기\n"
-            response += "다른 것에 지출하기 전에 소득의 일부를 저축하세요.\n\n"
-            response += "## 자동화 팁\n"
-            response += "- 저축으로 자동 이체 설정\n"
-            response += "- 구매 금액을 반올림하는 앱 사용\n"
-            response += "- 급여 인상 시 저축 증가\n\n"
-            response += "## 일반적인 저축 목표\n"
-            response += "1. 비상 자금 (3-6개월 생활비)\n"
-            response += "2. 은퇴 (소득의 15%)\n"
-            response += "3. 큰 구매 (집, 자동차)\n"
-            response += "4. 교육\n"
-            response += "5. 여행/개인 목표\n"
-        else:
-            response += "## まず自分に支払う\n"
-            response += "他のことに支出する前に、収入の一部を貯蓄しましょう。\n\n"
-            response += "## 自動化のヒント\n"
-            response += "- 貯蓄への自動振替を設定\n"
-            response += "- 購入金額を切り上げるアプリを使用\n"
-            response += "- 昇給時に貯蓄を増やす\n\n"
-            response += "## 一般的な貯蓄目標\n"
-            response += "1. 緊急資金（3〜6ヶ月分の生活費）\n"
-            response += "2. 退職（収入の15%）\n"
-            response += "3. 大きな買い物（家、車）\n"
-            response += "4. 教育\n"
-            response += "5. 旅行/個人的な目標\n"
-
-        response += "\n---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_concept_query(self, concept_id: str) -> str:
-        """Handle general concept queries."""
-        lang = self.language
-        concept = CONCEPTS_DB.get(concept_id)
-
-        if not concept:
-            return self._handle_general_query("")
-
-        response = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
-        response += f"{concept.description.get(lang, concept.description['en'])}\n\n"
-
-        response += "## " + ("Key Points" if lang == "en" else "핵심 포인트" if lang == "ko" else "キーポイント") + "\n\n"
-        for point in concept.key_points.get(lang, concept.key_points['en']):
-            response += f"- {point}\n"
-
-        response += "\n## " + ("Tips" if lang == "en" else "팁" if lang == "ko" else "ヒント") + "\n\n"
-        for tip in concept.tips.get(lang, concept.tips['en']):
-            response += f"💡 {tip}\n"
-
-        response += "\n---\n"
-        response += f"*{DISCLAIMER.get(lang, DISCLAIMER['en'])}*"
-
-        return response
-
-    def _handle_general_query(self, message: str) -> str:
-        """Handle general queries with welcome message."""
-        lang = self.language
-        msg = self.messages
-
-        response = f"# 💰 {msg['welcome']}\n\n"
-        response += f"{msg['welcome_desc']}\n\n"
-
-        response += "## " + ("I Can Help With" if lang == "en" else "도움을 드릴 수 있는 것들" if lang == "ko" else "お手伝いできること") + "\n\n"
-
-        features = msg['features']
-        response += f"- 📊 **{features['budget']}** - 50/30/20\n"
-        response += f"- 🎯 **{features['savings']}**\n"
-        response += f"- 🏖️ **{features['retirement']}**\n"
-        response += f"- 📈 **{features['investment']}**\n"
-        response += f"- 💳 **{features['debt']}**\n"
-        response += f"- 🚨 **{features['emergency']}**\n\n"
-
-        response += f"**{msg['ask']}**\n\n"
-
-        response += "---\n"
-        response += f"⚠️ *{msg['disclaimer']}*"
-
-        return response
-
-    def reset(self):
-        """Reset the finance advisor."""
+    def reset(self) -> None:
+        """Reset session state."""
         self.context = FinanceContext(language=self.language)
         self.conversation_history = []
-        self.memory.clear()
+        self._recent_turns.clear()
+
+    # ------------------------------------------------------------------ internals
+
+    def _append_history(self, role: str, content: str) -> None:
+        self.conversation_history.append(
+            {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
+        self._recent_turns.append((role, content))
+
+    def _maybe_append_disclaimer(self, user_message: str, response: str) -> str:
+        """Append the "NOT financial advice" disclaimer when relevant."""
+        msg_lower = user_message.lower()
+        triggers = any(keyword in msg_lower for keyword in ADVISORY_KEYWORDS)
+        already_has = (
+            "NOT financial advice" in response
+            or "재정 조언이 아닙니다" in response
+            or "財務アドバイスではありません" in response
+        )
+        if triggers and not already_has:
+            disclaimer = DISCLAIMER.get(self.language, DISCLAIMER["en"])
+            response = f"{response.rstrip()}\n\n---\n*{disclaimer}*"
+        return response
+
+    # -------- LLM-backed path --------------------------------------------
+
+    def _build_agent_executor(self) -> Any | None:
+        """Construct a LangChain tool-calling agent executor."""
+        try:
+            from langchain.agents import AgentExecutor, create_tool_calling_agent
+            from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", self.SYSTEM_PROMPT),
+                    MessagesPlaceholder("chat_history", optional=True),
+                    ("human", "{input}"),
+                    MessagesPlaceholder("agent_scratchpad"),
+                ]
+            )
+            agent = create_tool_calling_agent(self.llm, self.tools, prompt)
+            return AgentExecutor(
+                agent=agent,
+                tools=self.tools,
+                verbose=self.verbose,
+                handle_parsing_errors=True,
+                max_iterations=6,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Could not build agent executor: %s; using keyword fallback.", exc)
+            return None
+
+    def _llm_response(self, user_message: str) -> str:
+        assert self._agent_executor is not None
+        history_msgs = self._chat_history_for_lcel()
+        result = self._agent_executor.invoke(
+            {"input": user_message, "chat_history": history_msgs}
+        )
+        output = result.get("output") if isinstance(result, dict) else str(result)
+        if isinstance(output, list):
+            parts: list[str] = []
+            for block in output:
+                if isinstance(block, dict) and "text" in block:
+                    parts.append(str(block["text"]))
+                else:
+                    parts.append(str(block))
+            output = "\n".join(parts).strip()
+        if not isinstance(output, str) or not output.strip():
+            return self._keyword_router(user_message)
+        return output
+
+    def _chat_history_for_lcel(self) -> list[Any]:
+        """Convert the deque into LangChain message objects."""
+        try:
+            from langchain_core.messages import AIMessage, HumanMessage
+        except Exception:  # pragma: no cover
+            return []
+
+        messages: list[Any] = []
+        # Skip the just-appended user message (it goes into "input").
+        for role, content in list(self._recent_turns)[:-1]:
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            else:
+                messages.append(AIMessage(content=content))
+        return messages
+
+    # -------- keyword router (fallback) -----------------------------------
+
+    def _keyword_router(self, message: str) -> str:
+        message_lower = message.lower()
+
+        if any(w in message_lower for w in ("budget", "예산", "予算", "50/30/20")):
+            return self._handle_budget_query()
+
+        if any(w in message_lower for w in ("compound", "복리", "複利", "interest", "이자", "利息")):
+            return self._handle_compound_interest_query()
+
+        if any(
+            w in message_lower
+            for w in ("retire", "은퇴", "退職", "pension", "연금", "年金", "401k", "ira")
+        ):
+            return self._handle_retirement_query()
+
+        if any(
+            w in message_lower
+            for w in ("invest", "투자", "投資", "stock", "주식", "株", "bond", "채권", "債券", "fund")
+        ):
+            return self._handle_investment_query(message)
+
+        if any(
+            w in message_lower
+            for w in ("debt", "부채", "借金", "loan", "대출", "ローン", "mortgage", "payoff")
+        ):
+            return self._handle_debt_query()
+
+        if any(w in message_lower for w in ("emergency", "비상", "緊急", "rainy day")):
+            return self._handle_emergency_fund_query()
+
+        if any(w in message_lower for w in ("save", "saving", "저축", "貯蓄", "goal", "목표")):
+            return self._handle_savings_query()
+
+        if any(w in message_lower for w in ("diversif", "분산", "分散")):
+            return self._handle_concept_query("diversification")
+
+        return self._handle_general_query()
+
+    # -------- keyword response builders -----------------------------------
+
+    def _localise(self, en: str, ko: str, ja: str) -> str:
+        return {"en": en, "ko": ko, "ja": ja}.get(self.language, en)
+
+    def _handle_budget_query(self) -> str:
+        lang = self.language
+        concept = CONCEPTS_DB["budgeting"]
+
+        out = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
+        out += f"{concept.description.get(lang, concept.description['en'])}\n\n"
+
+        out += "## " + self._localise("Key Points", "핵심 포인트", "キーポイント") + "\n\n"
+        for point in concept.key_points.get(lang, concept.key_points["en"]):
+            out += f"- {point}\n"
+
+        out += "\n## " + self._localise("Budget Categories", "예산 카테고리", "予算カテゴリ") + "\n\n"
+        for cat in BUDGET_CATEGORIES:
+            out += f"**{cat.name.get(lang, cat.name['en'])}** — {cat.recommended_percent}%\n"
+            out += f"  {cat.description.get(lang, cat.description['en'])}\n\n"
+
+        return out.rstrip()
+
+    def _handle_compound_interest_query(self) -> str:
+        lang = self.language
+        concept = CONCEPTS_DB["compound_interest"]
+
+        out = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
+        out += f"{concept.description.get(lang, concept.description['en'])}\n\n"
+
+        out += "## " + self._localise("Key Points", "핵심 포인트", "キーポイント") + "\n\n"
+        for point in concept.key_points.get(lang, concept.key_points["en"]):
+            out += f"- {point}\n"
+
+        example = calculate_compound_interest(10000, 7, 30, 12)
+        out += "\n## " + self._localise("Example", "예시", "例") + "\n\n"
+        if lang == "ko":
+            out += "1,000만원을 7%로 30년 투자 (예시):\n"
+            out += f"- **최종 금액:** {example['final_amount'] * 100:,.0f}원\n"
+            out += f"- **이자 수익:** {example['interest_earned'] * 100:,.0f}원\n"
+        elif lang == "ja":
+            out += "100万円を7%で30年投資（例）:\n"
+            out += f"- **最終金額:** {example['final_amount'] * 100:,.0f}円\n"
+            out += f"- **利息収入:** {example['interest_earned'] * 100:,.0f}円\n"
+        else:
+            out += "$10,000 invested at 7% for 30 years:\n"
+            out += f"- **Final Amount:** ${example['final_amount']:,.2f}\n"
+            out += f"- **Interest Earned:** ${example['interest_earned']:,.2f}\n"
+
+        out += "\n## " + self._localise("Tips", "팁", "ヒント") + "\n\n"
+        for tip in concept.tips.get(lang, concept.tips["en"]):
+            out += f"- {tip}\n"
+
+        return out.rstrip()
+
+    def _handle_retirement_query(self) -> str:
+        lang = self.language
+        concept = CONCEPTS_DB["retirement_planning"]
+
+        out = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
+        out += f"{concept.description.get(lang, concept.description['en'])}\n\n"
+
+        out += "## " + self._localise("Key Points", "핵심 포인트", "キーポイント") + "\n\n"
+        for point in concept.key_points.get(lang, concept.key_points["en"]):
+            out += f"- {point}\n"
+
+        example = calculate_retirement_savings(30, 65, 500, 10000, 7)
+        out += "\n## " + self._localise(
+            "Example Projection", "예상 시뮬레이션", "予測シミュレーション"
+        ) + "\n\n"
+        if lang == "ko":
+            out += "30세에 시작, 65세 은퇴 (예시):\n"
+            out += "- 월 기여금: 50만원, 시작 저축: 1,000만원\n"
+            out += f"- **예상 총액:** {example['projected_total'] * 100:,.0f}원\n"
+            out += f"- **투자 성장:** {example['investment_growth'] * 100:,.0f}원\n"
+        elif lang == "ja":
+            out += "30歳開始、65歳退職（例）:\n"
+            out += "- 毎月の拠出: 5万円、開始貯蓄: 100万円\n"
+            out += f"- **予測総額:** {example['projected_total'] * 100:,.0f}円\n"
+            out += f"- **投資成長:** {example['investment_growth'] * 100:,.0f}円\n"
+        else:
+            out += "Starting at 30, retiring at 65 (illustrative):\n"
+            out += "- Monthly contribution: $500, starting savings: $10,000\n"
+            out += f"- **Projected Total:** ${example['projected_total']:,.2f}\n"
+            out += f"- **Investment Growth:** ${example['investment_growth']:,.2f}\n"
+
+        return out.rstrip()
+
+    def _handle_investment_query(self, message: str) -> str:
+        lang = self.language
+        message_lower = message.lower()
+
+        for inv_id, inv in INVESTMENTS_DB.items():
+            if inv_id in message_lower or any(
+                name.lower() in message_lower for name in inv.name.values()
+            ):
+                out = f"# {inv.name.get(lang, inv.name['en'])}\n\n"
+                out += f"{inv.description.get(lang, inv.description['en'])}\n\n"
+                out += (
+                    "**"
+                    + self._localise("Risk Level", "리스크 수준", "リスクレベル")
+                    + f":** {inv.risk_level.value.title()}\n"
+                )
+                out += (
+                    "**"
+                    + self._localise("Typical Returns", "일반적인 수익률", "典型的なリターン")
+                    + f":** {inv.typical_returns}\n\n"
+                )
+                out += "## " + self._localise("Pros", "장점", "メリット") + "\n"
+                for pro in inv.pros.get(lang, inv.pros["en"]):
+                    out += f"- {pro}\n"
+                out += "\n## " + self._localise("Cons", "단점", "デメリット") + "\n"
+                for con in inv.cons.get(lang, inv.cons["en"]):
+                    out += f"- {con}\n"
+                out += "\n## " + self._localise("Best For", "추천 대상", "おすすめの対象") + "\n"
+                for best in inv.best_for.get(lang, inv.best_for["en"]):
+                    out += f"- {best}\n"
+                return out.rstrip()
+
+        out = "# " + self._localise("Investment Types", "투자 유형", "投資タイプ") + "\n\n"
+        for inv in INVESTMENTS_DB.values():
+            out += f"### {inv.name.get(lang, inv.name['en'])}\n"
+            out += f"{inv.description.get(lang, inv.description['en'])}\n"
+            out += (
+                "*"
+                + self._localise("Risk", "리스크", "リスク")
+                + f": {inv.risk_level.value.title()}*\n\n"
+            )
+        return out.rstrip()
+
+    def _handle_debt_query(self) -> str:
+        lang = self.language
+        concept = CONCEPTS_DB["debt_management"]
+
+        out = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
+        out += f"{concept.description.get(lang, concept.description['en'])}\n\n"
+
+        out += "## " + self._localise("Key Strategies", "핵심 전략", "主要戦略") + "\n\n"
+        for point in concept.key_points.get(lang, concept.key_points["en"]):
+            out += f"- {point}\n"
+
+        out += "\n## " + self._localise(
+            "Debt Payoff Methods", "부채 상환 방법", "借金返済方法"
+        ) + "\n\n"
+        if lang == "ko":
+            out += "- **눈사태 방식:** 고금리 부채 먼저 상환 (총 이자 최소화)\n"
+            out += "- **눈덩이 방식:** 가장 작은 잔액 먼저 상환 (동기 부여)\n"
+        elif lang == "ja":
+            out += "- **アバランチ法:** 高金利の借金から返済（総利息を最小化）\n"
+            out += "- **スノーボール法:** 最小残高から返済（モチベーション向上）\n"
+        else:
+            out += "- **Avalanche method:** pay highest-interest debt first (lowest total interest)\n"
+            out += "- **Snowball method:** pay smallest balance first (builds momentum)\n"
+
+        return out.rstrip()
+
+    def _handle_emergency_fund_query(self) -> str:
+        lang = self.language
+        concept = CONCEPTS_DB["emergency_fund"]
+
+        out = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
+        out += f"{concept.description.get(lang, concept.description['en'])}\n\n"
+
+        out += "## " + self._localise("Key Points", "핵심 포인트", "キーポイント") + "\n\n"
+        for point in concept.key_points.get(lang, concept.key_points["en"]):
+            out += f"- {point}\n"
+
+        out += "\n## " + self._localise(
+            "How Much Do You Need?", "얼마나 필요한가요?", "いくら必要ですか？"
+        ) + "\n\n"
+        if lang == "ko":
+            out += "- 안정적인 직장, 부양가족 없음: 3개월\n"
+            out += "- 가족 또는 변동 소득: 6개월\n"
+            out += "- 자영업: 9-12개월\n"
+        elif lang == "ja":
+            out += "- 安定した仕事、扶養家族なし: 3ヶ月\n"
+            out += "- 家族または変動収入: 6ヶ月\n"
+            out += "- 自営業: 9-12ヶ月\n"
+        else:
+            out += "- Stable job, no dependents: 3 months\n"
+            out += "- Family or variable income: 6 months\n"
+            out += "- Self-employed: 9-12 months\n"
+
+        return out.rstrip()
+
+    def _handle_savings_query(self) -> str:
+        lang = self.language
+        if lang == "ko":
+            return (
+                "# 저축 전략\n\n"
+                "## 자신에게 먼저 지불하기\n"
+                "다른 것에 지출하기 전에 소득의 일부를 자동으로 저축으로 이체하세요.\n\n"
+                "## 일반적인 저축 목표\n"
+                "1. 비상 자금 (3-6개월 생활비)\n"
+                "2. 은퇴 (소득의 15%)\n"
+                "3. 큰 구매 (집, 자동차)\n"
+                "4. 교육\n"
+                "5. 여행/개인 목표"
+            )
+        if lang == "ja":
+            return (
+                "# 貯蓄戦略\n\n"
+                "## まず自分に支払う\n"
+                "他のことに支出する前に、収入の一部を自動的に貯蓄に振り替えましょう。\n\n"
+                "## 一般的な貯蓄目標\n"
+                "1. 緊急資金（3〜6ヶ月分の生活費）\n"
+                "2. 退職（収入の15%）\n"
+                "3. 大きな買い物（家、車）\n"
+                "4. 教育\n"
+                "5. 旅行/個人的な目標"
+            )
+        return (
+            "# Savings Strategies\n\n"
+            "## Pay Yourself First\n"
+            "Automate a portion of every paycheck into savings before you spend anything else.\n\n"
+            "## Common Savings Goals\n"
+            "1. Emergency Fund (3-6 months of expenses)\n"
+            "2. Retirement (15% of income)\n"
+            "3. Major Purchases (house, car)\n"
+            "4. Education\n"
+            "5. Travel / Personal Goals"
+        )
+
+    def _handle_concept_query(self, concept_id: str) -> str:
+        lang = self.language
+        concept = CONCEPTS_DB.get(concept_id)
+        if not concept:
+            return self._handle_general_query()
+
+        out = f"# {concept.name.get(lang, concept.name['en'])}\n\n"
+        out += f"{concept.description.get(lang, concept.description['en'])}\n\n"
+        out += "## " + self._localise("Key Points", "핵심 포인트", "キーポイント") + "\n\n"
+        for point in concept.key_points.get(lang, concept.key_points["en"]):
+            out += f"- {point}\n"
+        out += "\n## " + self._localise("Tips", "팁", "ヒント") + "\n\n"
+        for tip in concept.tips.get(lang, concept.tips["en"]):
+            out += f"- {tip}\n"
+        return out.rstrip()
+
+    def _handle_general_query(self) -> str:
+        lang = self.language
+        msg = MESSAGES.get(lang, MESSAGES["en"])
+        features = msg["features"]
+        out = f"# {msg['welcome']}\n\n{msg['welcome_desc']}\n\n"
+        out += "## " + self._localise(
+            "I Can Help With", "도움을 드릴 수 있는 것들", "お手伝いできること"
+        ) + "\n\n"
+        out += f"- **{features['budget']}** — 50/30/20\n"
+        out += f"- **{features['savings']}**\n"
+        out += f"- **{features['retirement']}**\n"
+        out += f"- **{features['investment']}**\n"
+        out += f"- **{features['debt']}**\n"
+        out += f"- **{features['emergency']}**\n\n"
+        out += f"**{msg['ask']}**\n\n---\n*{msg['disclaimer']}*"
+        return out
 
 
-def create_finance_agent(llm=None, verbose: bool = False, language: str = "en") -> FinanceAdvisorAgent:
-    """Factory function to create finance advisor."""
+def create_finance_agent(
+    llm: BaseChatModel | None = None,
+    verbose: bool = False,
+    language: str = "en",
+) -> FinanceAdvisorAgent:
+    """Factory function to create a finance advisor agent."""
     return FinanceAdvisorAgent(llm=llm, verbose=verbose, language=language)
+
+
+__all__ = [
+    "ADVISORY_KEYWORDS",
+    "SYSTEM_PROMPT",
+    "FinanceAdvisorAgent",
+    "FinanceContext",
+    "create_finance_agent",
+]

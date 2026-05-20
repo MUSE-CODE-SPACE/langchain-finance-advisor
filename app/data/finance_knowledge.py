@@ -3,8 +3,9 @@ Finance Knowledge Base - Financial concepts and calculations
 DISCLAIMER: For educational purposes only. Not financial advice.
 """
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from __future__ import annotations
+
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -27,40 +28,40 @@ class GoalType(Enum):
 class FinancialConcept:
     """Represents a financial concept."""
     id: str
-    name: Dict[str, str]  # i18n: {"en": "...", "ko": "...", "ja": "..."}
-    description: Dict[str, str]
-    key_points: Dict[str, List[str]]
-    tips: Dict[str, List[str]]
+    name: dict[str, str]  # i18n: {"en": "...", "ko": "...", "ja": "..."}
+    description: dict[str, str]
+    key_points: dict[str, list[str]]
+    tips: dict[str, list[str]]
 
 
 @dataclass
 class InvestmentType:
     """Represents an investment type."""
     id: str
-    name: Dict[str, str]
-    description: Dict[str, str]
+    name: dict[str, str]
+    description: dict[str, str]
     risk_level: RiskLevel
     typical_returns: str
-    pros: Dict[str, List[str]]
-    cons: Dict[str, List[str]]
-    best_for: Dict[str, List[str]]
+    pros: dict[str, list[str]]
+    cons: dict[str, list[str]]
+    best_for: dict[str, list[str]]
 
 
 @dataclass
 class BudgetCategory:
     """Budget category with recommended percentages."""
     id: str
-    name: Dict[str, str]
-    description: Dict[str, str]
+    name: dict[str, str]
+    description: dict[str, str]
     recommended_percent: float
-    tips: Dict[str, List[str]]
+    tips: dict[str, list[str]]
 
 
 # =============================================================================
 # FINANCIAL CONCEPTS DATABASE
 # =============================================================================
 
-CONCEPTS_DB: Dict[str, FinancialConcept] = {
+CONCEPTS_DB: dict[str, FinancialConcept] = {
     "compound_interest": FinancialConcept(
         id="compound_interest",
         name={
@@ -391,7 +392,7 @@ CONCEPTS_DB: Dict[str, FinancialConcept] = {
 # INVESTMENT TYPES DATABASE
 # =============================================================================
 
-INVESTMENTS_DB: Dict[str, InvestmentType] = {
+INVESTMENTS_DB: dict[str, InvestmentType] = {
     "stocks": InvestmentType(
         id="stocks",
         name={"en": "Stocks", "ko": "주식", "ja": "株式"},
@@ -533,7 +534,7 @@ INVESTMENTS_DB: Dict[str, InvestmentType] = {
 # BUDGET CATEGORIES
 # =============================================================================
 
-BUDGET_CATEGORIES: List[BudgetCategory] = [
+BUDGET_CATEGORIES: list[BudgetCategory] = [
     BudgetCategory(
         id="housing",
         name={"en": "Housing", "ko": "주거비", "ja": "住居費"},
@@ -631,22 +632,22 @@ BUDGET_CATEGORIES: List[BudgetCategory] = [
 # HELPER FUNCTIONS
 # =============================================================================
 
-def get_concept(concept_id: str) -> Optional[FinancialConcept]:
+def get_concept(concept_id: str) -> FinancialConcept | None:
     """Get a financial concept by ID."""
     return CONCEPTS_DB.get(concept_id)
 
 
-def get_investment_type(investment_id: str) -> Optional[InvestmentType]:
+def get_investment_type(investment_id: str) -> InvestmentType | None:
     """Get an investment type by ID."""
     return INVESTMENTS_DB.get(investment_id)
 
 
-def get_concepts_list() -> List[FinancialConcept]:
+def get_concepts_list() -> list[FinancialConcept]:
     """Get all financial concepts."""
     return list(CONCEPTS_DB.values())
 
 
-def get_investments_by_risk(risk_level: RiskLevel) -> List[InvestmentType]:
+def get_investments_by_risk(risk_level: RiskLevel) -> list[InvestmentType]:
     """Get investments by risk level."""
     return [inv for inv in INVESTMENTS_DB.values() if inv.risk_level == risk_level]
 
@@ -655,8 +656,8 @@ def calculate_compound_interest(
     principal: float,
     annual_rate: float,
     years: int,
-    compounds_per_year: int = 12
-) -> Dict:
+    compounds_per_year: int = 12,
+) -> dict:
     """Calculate compound interest."""
     rate = annual_rate / 100
     amount = principal * (1 + rate / compounds_per_year) ** (compounds_per_year * years)
@@ -677,8 +678,8 @@ def calculate_retirement_savings(
     retirement_age: int,
     monthly_contribution: float,
     current_savings: float = 0,
-    annual_return: float = 7.0
-) -> Dict:
+    annual_return: float = 7.0,
+) -> dict:
     """Calculate projected retirement savings."""
     years = retirement_age - current_age
     rate = annual_return / 100 / 12
@@ -711,8 +712,8 @@ def calculate_retirement_savings(
 def calculate_loan_payment(
     principal: float,
     annual_rate: float,
-    years: int
-) -> Dict:
+    years: int,
+) -> dict:
     """Calculate monthly loan payment."""
     monthly_rate = annual_rate / 100 / 12
     num_payments = years * 12
@@ -736,7 +737,7 @@ def calculate_loan_payment(
     }
 
 
-def get_budget_recommendation(monthly_income: float) -> Dict:
+def get_budget_recommendation(monthly_income: float) -> dict:
     """Get budget recommendation based on income."""
     recommendations = {}
     for category in BUDGET_CATEGORIES:
