@@ -1,6 +1,6 @@
 # AI Finance Advisor
 
-LangChain 0.3 powered personal finance *education* assistant with a Flask API
+LangChain 1.x powered personal finance *education* assistant with a Flask API
 and multi-language support (English / Korean / Japanese).
 
 > **IMPORTANT FINANCIAL DISCLAIMER**
@@ -14,7 +14,7 @@ and multi-language support (English / Korean / Japanese).
 > 재무·세무·법률·투자 자문도 아닙니다. 본인의 상황에 맞는 안내가 필요하다면
 > 반드시 **자격을 갖춘 재정 상담사**와 상담하세요.
 
-[**Live demo**](https://yoon-k.github.io/langchain-finance-advisor/)
+[**Live demo**](https://MUSE-CODE-SPACE.github.io/langchain-finance-advisor/)
 
 ---
 
@@ -87,8 +87,8 @@ The agent picks a backend based on environment variables:
 
 | `LLM_PROVIDER` | Required keys                       | Default model                 | Behaviour |
 | -------------- | ----------------------------------- | ----------------------------- | --------- |
-| `anthropic`    | `ANTHROPIC_API_KEY`                 | `claude-haiku-4-5-20251001`   | Tool-calling agent (LCEL) |
-| `openai`       | `OPENAI_API_KEY`                    | `gpt-4o-mini`                 | Tool-calling agent (LCEL) |
+| `anthropic`    | `ANTHROPIC_API_KEY`                 | `claude-haiku-5-5`   | Tool-calling agent (`create_agent`) |
+| `openai`       | `OPENAI_API_KEY`                    | `gpt-5.4-mini`                 | Tool-calling agent (`create_agent`) |
 | `none`         | —                                   | —                             | Deterministic keyword router (offline) |
 | *(unset)*      | auto-detect from any key present    | as above                      | Falls back to `none` if no keys |
 
@@ -104,9 +104,9 @@ payoff, large purchases, retirement projections, budget plans), the
 |----------|---------|-------------|
 | `LLM_PROVIDER` | auto-detect | `anthropic`, `openai`, or `none` |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key for the Claude provider |
-| `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | Override the Claude model id |
+| `ANTHROPIC_MODEL` | `claude-haiku-5-5` | Override the Claude model id |
 | `OPENAI_API_KEY` | — | OpenAI API key |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Override the OpenAI model id |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Override the OpenAI model id |
 | `PORT` | `5000` | Port for the Flask dev server / gunicorn |
 | `FLASK_DEBUG` | `1` | Set to `0` to disable Werkzeug debug mode |
 
@@ -132,7 +132,7 @@ via gunicorn (`--workers 2`).
 ```
 langchain-finance-advisor/
 ├── app/
-│   ├── agents/finance_agent.py     # LCEL tool-calling agent + keyword fallback
+│   ├── agents/finance_agent.py     # `create_agent` tool-calling agent + keyword fallback
 │   ├── tools/finance_tools.py      # BaseTool implementations (Pydantic v2)
 │   ├── data/finance_knowledge.py   # Dataclass-backed concept / investment / budget DB
 │   └── api.py                      # Flask app factory
@@ -166,15 +166,15 @@ langchain-finance-advisor/
   `CompoundInterestTool`, `RetirementCalcTool`, `InvestmentEducationTool`,
   `DebtPayoffTool`, `EmergencyFundTool`, `LoanCalculatorTool`,
   `FinancialConceptTool`, `BudgetCategoriesOverviewTool`.
-- **Agent** (LangChain 0.3): `create_tool_calling_agent` + `AgentExecutor`,
-  with a `ChatPromptTemplate` that bakes in the financial education
+- **Agent** (LangChain 1.x): `create_agent` (a LangGraph tool-calling loop)
+  with a system prompt that bakes in the financial education
   disclaimer.
 - **Memory**: a windowed `collections.deque` (no deprecated
   `ConversationBufferWindowMemory`).
 
 ## Tech stack
 
-- **LangChain 0.3** (`langchain`, `langchain-core`, `langchain-community`)
+- **LangChain 1.x** (`langchain`, `langchain-core`, `langgraph`)
 - **Provider SDKs**: `langchain-anthropic`, `langchain-openai`
 - **Flask 3.1** + `flask-cors`
 - **Pydantic v2** for tool input schemas
@@ -189,7 +189,7 @@ MIT. Educational project — not financial advice.
 
 ## 한국어 안내 (Korean)
 
-LangChain 0.3 기반의 개인 금융 *교육용* 어시스턴트입니다. 한국어/영어/일본어를
+LangChain 1.x 기반의 개인 금융 *교육용* 어시스턴트입니다. 한국어/영어/일본어를
 지원하며, API 키가 있으면 Anthropic Claude 또는 OpenAI GPT를 자동 선택해
 LLM + 툴콜링으로 응답합니다. 키가 없으면 내장 키워드 라우터로 폴백되어 외부
 호출 없이도 동작합니다.
