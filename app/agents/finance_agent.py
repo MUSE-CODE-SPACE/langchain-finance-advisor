@@ -1,5 +1,5 @@
 """
-Finance Agent - LangChain 0.3 agent for the personal-finance education app.
+Finance Agent - LangChain 1.x agent for the personal-finance education app.
 
 DISCLAIMER: This module powers an *educational* assistant. It is NOT a
 substitute for personalised financial advice from a licensed professional.
@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 from app.data.finance_knowledge import (
     BUDGET_CATEGORIES,
     CONCEPTS_DB,
@@ -40,8 +42,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+# Upper bound on model -> tool round-trips per user turn (mirrors the old
+# ``AgentExecutor(max_iterations=...)``). Each round-trip is two graph steps.
+MAX_AGENT_STEPS = 6
+
+
+def extract_final_text(result: Any) -> str:
+    """Return the text of the last assistant message in a ``create_agent`` result."""
+    messages = result.get("messages") if isinstance(result, dict) else None
+    if not messages:
+        return ""
+    last = messages[-1]
+    if not isinstance(last, AIMessage):
+        return ""
+    return str(last.text).strip()
+
+
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
+DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 
 
 # Topics that should always carry the financial-advice disclaimer.
@@ -199,7 +217,7 @@ def _resolve_llm() -> tuple[str, BaseChatModel | None]:
             from langchain_anthropic import ChatAnthropic
 
             model = os.environ.get("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
-            return "anthropic", ChatAnthropic(model=model, temperature=0.2, max_tokens=1024)
+            return "anthropic", ChatAnthropic(model=model, max_tokens=4096)
 
         if provider == "openai":
             if not has_openai:
@@ -208,7 +226,7 @@ def _resolve_llm() -> tuple[str, BaseChatModel | None]:
             from langchain_openai import ChatOpenAI
 
             model = os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-            return "openai", ChatOpenAI(model=model, temperature=0.2)
+            return "openai", ChatOpenAI(model=model)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Failed to construct LLM for provider %s: %s", provider, exc)
         return "none", None
@@ -311,26 +329,15 @@ class FinanceAdvisorAgent:
     # -------- LLM-backed path --------------------------------------------
 
     def _build_agent_executor(self) -> Any | None:
-        """Construct a LangChain tool-calling agent executor."""
+        """Construct a LangGraph tool-calling agent (LangChain 1.x ``create_agent``)."""
         try:
-            from langchain.agents import AgentExecutor, create_tool_calling_agent
-            from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+            from langchain.agents import create_agent
 
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", self.SYSTEM_PROMPT),
-                    MessagesPlaceholder("chat_history", optional=True),
-                    ("human", "{input}"),
-                    MessagesPlaceholder("agent_scratchpad"),
-                ]
-            )
-            agent = create_tool_calling_agent(self.llm, self.tools, prompt)
-            return AgentExecutor(
-                agent=agent,
-                tools=self.tools,
-                verbose=self.verbose,
-                handle_parsing_errors=True,
-                max_iterations=6,
+            return create_agent(
+                self.llm,
+                self.tools,
+                system_prompt=self.SYSTEM_PROMPT,
+                debug=self.verbose,
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Could not build agent executor: %s; using keyword fallback.", exc)
@@ -340,28 +347,16 @@ class FinanceAdvisorAgent:
         assert self._agent_executor is not None
         history_msgs = self._chat_history_for_lcel()
         result = self._agent_executor.invoke(
-            {"input": user_message, "chat_history": history_msgs}
+            {"messages": [*history_msgs, HumanMessage(content=user_message)]},
+            config={"recursion_limit": 2 * MAX_AGENT_STEPS + 1},
         )
-        output = result.get("output") if isinstance(result, dict) else str(result)
-        if isinstance(output, list):
-            parts: list[str] = []
-            for block in output:
-                if isinstance(block, dict) and "text" in block:
-                    parts.append(str(block["text"]))
-                else:
-                    parts.append(str(block))
-            output = "\n".join(parts).strip()
-        if not isinstance(output, str) or not output.strip():
+        output = extract_final_text(result)
+        if not output:
             return self._keyword_router(user_message)
         return output
 
     def _chat_history_for_lcel(self) -> list[Any]:
         """Convert the deque into LangChain message objects."""
-        try:
-            from langchain_core.messages import AIMessage, HumanMessage
-        except Exception:  # pragma: no cover
-            return []
-
         messages: list[Any] = []
         # Skip the just-appended user message (it goes into "input").
         for role, content in list(self._recent_turns)[:-1]:
